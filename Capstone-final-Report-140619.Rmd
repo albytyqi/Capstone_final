@@ -1,0 +1,705 @@
+---
+title: "Capstone Project"
+author: "Alma Bytyqi"
+date: "June 12, 2019"
+output:
+  pdf_document: 
+    fig_caption: yes
+    fig_height: 2
+    fig_width: 4.25
+    keep_tex: yes
+    toc: true # table of content true
+    toc_depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    number_sections: true  ## if you want number sections at each table header
+    highlight: tango  # specifies the syntax highlighting style
+  
+    
+---
+\pagebreak
+Note that this excercise uses the following packages, hence please download them if not already done:
+
+library(kableExtra)
+library(tidyverse)
+library (caret)
+library(readr)
+library(stringr)
+
+```{r setup , include=FALSE, cache=TRUE}
+knitr::opts_chunk$set(echo = FALSE, cache=TRUE, message=FALSE, warning= FALSE)
+library(kableExtra)
+library(tidyverse)
+library (caret)
+library(readr)
+library(stringr)
+#Extracting the data#
+
+googleplaystore <- read_csv("googleplaystore.csv")
+
+```
+\pagebreak
+
+# Introduction
+
+The goal of this project is to create a recommendation system for Apps on Google Play using the Google Play Store App data set from Kaggle. The dataset presents each Application observations by Ratings, number of downloads, OS version, Number of reviews, etc. In total there are 13 variables qualifying one App.  
+We need to train a machine learning algorithm using the inputs in one subset to predict App ratings in the validation set, develop our algorithm using a new subset and finally test out prediction for App ratings in the validation set as if they were unknown. RMSE will be used to evaluate how close our predictions are to the true values in the validation set.
+
+# Dataset description and Analysis
+
+For this project, I used the Google Playstore App data set downloaded the data set from Kaggle.
+
+
+## Data Structure
+
+Using the Tidyverse Package, we can easily analyse the structure of the datasets.
+In order to better understand the challenge of this project, we need to see the general properties of the data.
+
+
+```{r,echo=FALSE, cache=TRUE}
+dim1 <- dim(googleplaystore)
+```
+Data set GooglePlaystoreApp, which is the test dataset and has a dimension of `r dim1[1]` observations and `r dim1[2]` variables.
+
+With following internal structure:
+```{r,echo=FALSE, cache=TRUE}
+str(googleplaystore) 
+```
+
+So there are 2 columns with numeric inputs and 11 with character inputs.
+
+Next step is to analyse how many non-numeric input there are in numeric columns. 
+
+First column to be analysed is the Rating variable.
+There are `r sum(is.na(as.numeric(googleplaystore$Rating)))` entries  as *NaN* in Rating Column.
+
+By looking at a snapshot of several Apps with "NaN" as entry for Rating, we notice that other variable entries are correct hence at this stage we will not delete any of the rows with NaN as Rating.
+ 
+```{r,echo=FALSE, cache=TRUE}
+ x<-str_which(googleplaystore$Rating,"NaN") 
+googleplaystore[c(x),] 
+
+```
+
+Next, we check the column with Reviews to see if all entries are numeric.
+
+There is `r sum(is.na(as.numeric(googleplaystore$Reviews))) ` entry as non-numeric for Reviews column.
+
+Printout of the observation with non-numeric Review entry:
+
+
+```{r,echo=FALSE, cache=TRUE}
+
+paste(googleplaystore %>% filter(is.na(as.numeric(googleplaystore$Reviews))))
+
+```
+
+This line will be taken out later  when we clean the dataframe for the "Installs" column.
+
+Next the column representing the Size of the App will be analysed. For analyzing the "Size" column, first we identified the pattern used for entries for Size which is the patern where the Size starts with a number. Thus, we identify if there is any Size entry not starting with a number and run another analysis and check what kind of entries are there.
+
+```{r,echo=FALSE, cache=TRUE}
+pattern <- "^[A-z]"
+Sized<-sum(str_detect(googleplaystore$Size, pattern))
+```
+
+There are `r Sized ` entries that do not start with a number.
+
+List of Size variable :
+
+```{r, echo=FALSE, cache=TRUE}
+
+googleplaystore%>% group_by(Size)%>% summarise(count=n()) %>% arrange(desc(count)) %>% head(n=20) %>%knitr::kable()
+
+```
+
+And we see that all `r Sized` mismatch are the same, and it actually is not a mistake but the entry is quite logical since the Application Size depends on the device ("varies by device").
+
+Next, column "Type" will be analysed:
+
+```{r,echo=FALSE, cache=TRUE}
+googleplaystore %>% group_by(Type)%>% summarise(count=n()) %>% arrange(desc(count))%>% head(n=20) %>%knitr::kable()
+
+```
+
+Printout  line containing Type as O:
+```{r,echo=FALSE, cache=TRUE}
+
+s<-"NaN"
+paste(googleplaystore[str_which(googleplaystore$Type,s),])
+
+Typed<-str_which(googleplaystore$Type,s)
+```
+
+There is one NaN and one 0, and the line with Type=0 is the same line that will be taken out when clearing for Reviews, and it is in line number `r Typed`.
+
+Next, column "Installs" is analyzed: 
+
+```{r, echo=FALSE, cache=TRUE}
+pattern_I<-"^[a-z,A-Z]"
+Insd<-sum(str_detect(googleplaystore$Installs,pattern_I))
+
+Insdl<-str_which(googleplaystore$Installs,pattern_I)
+
+```
+
+The pattern for Installs is numbers ending with a "+" sign. So, we check which lines do not match the pattern or more precisely, we check which line starts with a Letter, and there are `r Insd` lines starting with a Letter instead of a number in the Installs column.
+
+and we check the line number, which is line number `r Insdl`.
+
+Where we see that generally this App has wrong entries in nearly all columns:
+
+```{r, echo=FALSE, cache=TRUE}
+paste(googleplaystore[c(str_which(googleplaystore$Installs,pattern_I)),])
+
+```
+
+## Cleaning the Data set
+
+Now we can start cleaning the dataset. 
+
+First we take out the 2 lines containing the wrong "Installs" entry and "Type" entry, since it is also correlating with the wrong Reviews entries and rename the new dataset as *New_googleplaystore*:
+
+```{r, echo=FALSE, cache=TRUE}
+
+New_googleplaystore<-googleplaystore[-c(str_which(googleplaystore$Type,s),str_which(googleplaystore$Installs,pattern_I)),] 
+
+```
+
+Below is shown the new structure if the new data set renamed as "New_googleplaystore":
+```{r, echo=FALSE, cache=TRUE}
+str(New_googleplaystore)
+```
+
+Since for validation set and test set  need the ratings to be numerical and not *NaN*, we will need to take out the *NaN* entries from the dataframe:
+```{r, echo=FALSE, cache=TRUE}
+
+x<-str_which(New_googleplaystore$Rating,"NaN") 
+New_googleplaystore<-New_googleplaystore[-c(x),]
+
+```
+
+The table is cleaned, and now we present a review of the new data set:
+
+```{r, echo=FALSE, cache=TRUE,tidy=TRUE, table.align = 'l'}
+New_googleplaystore %>% group_by(Type)%>% summarise(count=n()) %>%knitr::kable()
+New_googleplaystore %>% group_by(Installs)%>% summarise(count=n())%>% arrange(Installs)  %>%knitr::kable()
+New_googleplaystore %>% group_by(Price)%>% summarise(count=n()) %>% arrange(desc(count)) %>% head(n=20L)%>%knitr::kable()
+New_googleplaystore %>% group_by(`Content Rating`)%>% summarise(count=n())  %>%knitr::kable()
+New_googleplaystore %>%group_by(Genres)%>% summarise(count=n()) %>% arrange(desc(count)) %>% head(n=20L)%>%knitr::kable()
+New_googleplaystore %>% group_by(App) %>% summarize(count=n())%>%arrange(desc(count)) %>% head(n=20L)%>%knitr::kable()
+```
+
+ 
+```{r, echo=FALSE, cache=TRUE}
+l<-New_googleplaystore %>% group_by(App) %>% summarize(count=n())%>% filter(count>1) %>%arrange(desc(count))
+
+```
+It seems that `r dim(l)[1]` Apps are present more than once in the table.
+
+See below example of most frequently repated Apps:
+
+As an example of repeated Apps:
+```{r, echo=FALSE, cache=TRUE}
+New_googleplaystore %>% select(App, Category, Rating, Reviews, Size, Installs, Type, Price, `Content Rating`, Genres)%>%
+  filter(App== "Helix Jump")%>% knitr::kable()
+```
+
+Next step is to take out the duplicated App entries.
+
+```{r, echo=FALSE, cache=TRUE}
+New_googleplaystore<-New_googleplaystore %>% distinct(App, .keep_all = TRUE) 
+
+```
+
+Next: change the variable type for Installs from chr to number since it will simplify analyses.
+
+```{r, echo=FALSE, cache=TRUE}
+New_googleplaystore<-New_googleplaystore %>% mutate(Installs= as.numeric(str_replace_all(Installs,"[+/,]","")))
+str(New_googleplaystore)
+```
+
+The final dataset has `r dim(New_googleplaystore)[1]`  entries with `r dim(New_googleplaystore)[2]` variables - 3 numeric and 10 character.
+
+## Table Review Summary
+
+The following table presents the total number of rated Apps, Category, Content Rating, OS Version and Genres.
+
+Data set table structure:
+
+```{r ,echo=FALSE, cache=TRUE}
+
+n_App <- n_distinct(New_googleplaystore$App)
+n_Category <- n_distinct(New_googleplaystore$Category)
+n_CRating  <- n_distinct(New_googleplaystore$`Content Rating`)
+n_version  <-  n_distinct(New_googleplaystore$`Android Ver`)
+n_Genres  <-  n_distinct(New_googleplaystore$Genres)
+
+Data_structure_table <- data_frame(analyse="Distinct  App", total = n_App )
+Data_structure_table <-bind_rows(Data_structure_table,data_frame(analyse="Distinct Category ", total = n_Category ))
+Data_structure_table <-bind_rows(Data_structure_table,data_frame(analyse="Distinct Content Rating ", total = n_CRating ))
+Data_structure_table <-bind_rows(Data_structure_table,data_frame(analyse="Distinct Android Version ", total = n_version ))
+Data_structure_table <-bind_rows(Data_structure_table,data_frame(analyse="Distinct Genres ", total = n_Genres ))
+
+
+Data_structure_table %>% knitr::kable()
+```
+
+Below is the list of 20 most popular Genres:
+
+```{r,echo=FALSE, cache=TRUE}
+
+GenreL<-New_googleplaystore %>% separate_rows(Genres) %>%
+  group_by(Genres) %>% 
+  summarize(count = n()) %>%
+  arrange(desc(count)) 
+GenreL %>% filter(count>250) %>% knitr::kable()
+```
+
+There are `r dim(GenreL)[1]` different genres.
+
+Rating distribution plot by Ratings:
+
+```{r,echo=FALSE, cache=TRUE,fig.align='center' }
+New_googleplaystore %>% filter(!is.na(Rating)& (Rating<=5)) %>%
+  group_by(Rating) %>%
+  summarize(count = n()) %>% # print(n=41)
+  ggplot(aes(x = Rating, y = count, width = 200, height = 600)) +
+  geom_line(color="blue", size=2) +
+  scale_x_log10() + ggtitle("Ratings")
+
+```
+
+Rating distribution plot by Installs
+
+```{r,echo=FALSE, cache=TRUE,fig.align='center',  message=FALSE, warning= FALSE}
+
+New_googleplaystore %>% 
+  group_by(Installs) %>% 
+ summarize(count = n()) %>% filter(count>100)%>%
+  ggplot(aes(x = Installs,  y = count)) +
+  geom_smooth(alpha=0.1)+ ggtitle("Installs ")
+
+```
+
+Plot by Reviews vs Installs:
+
+```{r,echo=FALSE, cache=TRUE,fig.align='center',  message=FALSE, warning= FALSE}
+
+New_googleplaystore %>% group_by(Reviews,Installs) %>% arrange(desc(Installs)) %>%
+  ggplot(aes(x=Reviews, y=Installs)) +
+  geom_smooth(alpha=0.1)+ ggtitle("Reviews vs Installs")
+
+
+```
+
+Plot by Category vs Installs:
+
+```{r,echo=FALSE, cache=TRUE,fig.align='center', fig.width=5,fig.height=3, fontsize=3}
+New_googleplaystore  %>% group_by(Category)%>%arrange(desc(Installs)) %>%
+  ggplot(aes(Installs, Category)) +
+  geom_line(colour="dark blue", size=1)+ ggtitle("Category vs Installs")
+```
+
+
+
+# Creating the recommendation system
+
+First, we need to create the Validation set and the Actual set which will be called "capstone:
+
+1. The Validation set will be 10% of GooglePlaystore data,
+2. Make sure Category,Installs and Genres in validation set are also in Capstone set
+
+```{r,echo=FALSE, cache=TRUE, message=FALSE, warning= FALSE}
+# Validation set will be 10% of GooglePlaystore data
+library(caret)
+set.seed(1)
+test_index <- createDataPartition(y = New_googleplaystore$Rating, times = 1, p = 0.1, list = FALSE)
+Capstone <- New_googleplaystore[-test_index,]
+temp <- New_googleplaystore[test_index,] #%>%print(n=739)
+
+# Make sure Category,Installs and Genres in validation set are also in Capstone set
+
+validation <- temp %>% 
+  semi_join(Capstone, by = "Category") %>%
+  semi_join(Capstone, by = "Installs") %>%
+  semi_join(Capstone, by="Genres")
+
+# Add rows removed from validation set back into Capstone set
+
+removed <- anti_join(temp, validation)
+Capstone <- rbind(Capstone, removed)
+
+rm(test_index, temp,  removed) 
+
+```
+Let's analyse the new set named *Capstone*.
+
+Rating distribution plot by Genres:
+
+```{r,echo=FALSE, cache=TRUE,fig.align='center'}
+
+Capstone %>%   count(Genres) %>% 
+  ggplot(aes(n)) + 
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + 
+  ggtitle("rating distribution plot by Genres ") 
+
+```
+
+10 top reviewed App:
+
+```{r,echo=FALSE, cache=TRUE}
+
+Capstone %>%group_by(App, Reviews) %>% select(App,Category,Rating, Reviews, Installs, Type,Genres)%>%
+   arrange(desc(Reviews)) %>% head(n=10L)%>% knitr::kable()%>% kable_styling() %>%column_spec(1, width="2cm")
+
+```
+
+10 least reviewed App:
+
+```{r,echo=FALSE, cache=TRUE}
+
+Capstone %>% group_by(App, Reviews) %>% select(App,Category,Rating, Reviews, Installs, Type,Genres)%>%  arrange((Reviews)) %>% head(n=10L)%>%knitr::kable()%>% kable_styling() %>%column_spec(1, width="2cm")
+
+```
+
+Next, we need to create the Loss function, the residual mean squared error (RMSE) on a test set. The interpretation of which is if this number is larger than 1, it means our typical error is larger than one star, which is not good.
+
+```{r, echo=TRUE, cache=TRUE}
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+
+## The simple model
+
+The first model is to build the simplest possible recommendation system: same rating for all App regardless of other entries such as Reviews, Installs and Genres.
+
+and we will call the simple model RMSE, the naive RMSE.
+
+```{r,echo=FALSE, cache=TRUE}
+mu_hat <- mean(Capstone$Rating)
+```
+Where mu_hat = `r mu_hat`.
+
+Thus, value of naive RMSE is equal to:
+
+```{r,echo=FALSE, cache=TRUE}
+naive_rmse <- RMSE(validation$Rating, mu_hat) 
+
+rmse_results <- data_frame(method = "Just the average", RMSE = naive_rmse)
+rmse_results %>% knitr::kable()
+```
+
+This table will be used to evaluate the improvement of each model.
+
+This shows us that RMSE is already at  `r naive_rmse`, meaning that the prediction has a strong accuracy.
+Next step is to introduce the Category effect model for predicting the ratings:
+
+```{r,echo=FALSE, cache=TRUE}
+mu <- mean(Capstone$Rating) 
+Category_avgs <- Capstone %>% 
+  group_by(Category) %>% 
+  summarize(b_i = mean(Rating - mu))
+Category_avgs %>% qplot(b_i, geom ="histogram", bins = 10, data = ., color = I("black"))
+
+predicted_ratings <- mu + validation %>% 
+  left_join(Category_avgs, by='Category') %>%
+  .$b_i
+
+model_1_rmse <- RMSE(predicted_ratings, validation$Rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Category Effect Model",  
+                                     RMSE = model_1_rmse ))
+rmse_results %>% knitr::kable()
+```
+
+The table shows  a slight improvement of the prediction using the Category effect, as RMSE is equal to `r model_1_rmse`.
+
+Now, we should add also the Number of Installations (Installs) effect into the model since more Installs means more accurate ratings:
+
+```{r,echo=FALSE, cache=TRUE}
+Installs_avgs <- Capstone %>%
+  left_join(Category_avgs, by='Category') %>%
+  group_by(Installs) %>%
+  summarize(b_u = mean(Rating - mu - b_i))
+
+predicted_ratings <- validation %>% 
+  left_join(Category_avgs, by='Category') %>%
+  left_join(Installs_avgs, by='Installs') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+model_2_rmse <- RMSE(predicted_ratings, validation$Rating)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Category + Installs Effects Model",  
+                                     RMSE = model_2_rmse ))
+rmse_results %>% knitr::kable()
+
+```
+
+In this case the prediction have highly improved since the RMSE is equal to `r model_2_rmse`.
+
+However, the analysis does not stop here since we can add also the genre effect to the model as this factor impacts also the rating values:
+
+```{r,echo=FALSE, cache=TRUE}
+genres_avgs <- Capstone %>% 
+  left_join(Category_avgs, by='Category') %>%
+  left_join(Installs_avgs, by='Installs') %>%
+  group_by(Genres) %>%
+  summarize(b_g = mean(Rating - mu - b_i - b_u))
+
+predicted_ratings <- validation %>% 
+  left_join(Category_avgs, by='Category') %>%
+  left_join(Installs_avgs, by='Installs') %>%
+  left_join(genres_avgs, by='Genres') %>%
+  mutate(pred = mu + b_i + b_u +b_g) %>%
+  .$pred
+model_g_rmse <- RMSE(predicted_ratings, validation$Rating)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Category + Installs +genres Effects Model",  
+                                     RMSE = model_g_rmse ))
+rmse_results %>% knitr::kable()
+```
+
+Here, we notice that result are slightly improved with RMSE equaling to `r model_g_rmse`.
+
+##Regularization
+
+Because data set analysis showed us that some Apps are rarely rated , we should add a regularization effect to the prediction. This is done by introducing the Penalized Least squares with Lambda a penalty factor.
+First, we create a sequence of Lambdas which will be applied to a new function for determining the best lambda fit with lambda between 0 and 400 with steps of 0.25.
+
+```{r, echo=TRUE, cache=TRUE}
+lambdas <- seq(0, 400, 0.25)
+```
+
+Next, we create the function and plot the evaluation of the lambdas against RMSE with b_i (category effect model):
+
+```{r,echo=FALSE, cache=TRUE}
+
+rmses_b_i <- sapply(lambdas, function(l){
+  
+  mu <- mean(Capstone$Rating)
+  
+  b_i <- Capstone %>% 
+    group_by(Category) %>%
+    summarize(b_i = sum(Rating - mu)/(n()+l))
+  
+  predicted_ratings <- 
+    validation %>% 
+    left_join(b_i, by = "Category") %>%
+    mutate(pred = mu + b_i ) %>%
+    .$pred
+  
+  return(RMSE(predicted_ratings, validation$Rating))
+})
+
+```
+
+```{r,echo=FALSE, cache=TRUE,fig.align='center'}
+
+qplot(lambdas, rmses_b_i)
+```
+
+
+```{r,echo=FALSE, cache=TRUE}
+lambda_i <- lambdas[which.min(rmses_b_i)]
+```
+
+Thus  optimal lambda with category effect model is : `r lambda_i`.
+and we get RMSE result of `r min(rmses_b_i)`:
+
+```{r,echo=FALSE, cache=TRUE, }
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized Category Effect Model",  
+                                     RMSE = min(rmses_b_i)))
+rmse_results %>% knitr::kable()
+```
+
+Next step is to add the Installs effect regularized model:
+
+```{r,echo=FALSE, cache=TRUE}
+rmses_b_u <- sapply(lambdas, function(l){
+  
+  mu <- mean(Capstone$Rating)
+  
+  b_i <- Capstone %>% 
+    group_by(Category) %>%
+    summarize(b_i = sum(Rating - mu)/(n()+lambda_i))
+  
+  b_u <- Capstone %>% 
+    left_join(b_i, by="Category") %>%
+    group_by(Installs) %>%
+    summarize(b_u = sum(Rating - b_i - mu)/(n()+l))
+  
+  predicted_ratings <- 
+    validation %>% 
+    left_join(b_i, by = "Category") %>%
+    left_join(b_u, by = "Installs") %>%
+    mutate(pred = mu + b_i+ b_u ) %>%
+    .$pred
+  
+  return(RMSE(predicted_ratings, validation$Rating))
+})
+
+```
+
+```{r,echo=FALSE, cache=TRUE, fig.align='center'}
+qplot(lambdas, rmses_b_u) 
+```
+
+
+```{r,echo=FALSE, cache=TRUE}
+lambda_u <- lambdas[which.min(rmses_b_u)]
+
+```
+The plot shows us that the optimal lambda for Installs effect model is `r lambda_u`.
+
+And RMSE result are improved as shown on table below where RMSE equals `r min(rmses_b_u)`:
+
+```{r,echo=FALSE, cache=TRUE}
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized Category + Installs Effect Model",  
+                                     RMSE = min(rmses_b_u)))
+rmse_results %>% knitr::kable()
+```
+
+Last effect to be introduced into the model is the genre effect:
+
+```{r,echo=FALSE, cache=TRUE}
+
+rmses_b_g <- sapply(lambdas, function(l){
+  
+  mu <- mean(Capstone$Rating)
+  
+  b_i <- Capstone %>% 
+    group_by(Category) %>%
+    summarize(b_i = sum(Rating - mu)/(n()+lambda_i))
+  
+  b_u <- Capstone %>% 
+    left_join(b_i, by="Category") %>%
+    group_by(Installs) %>%
+    summarize(b_u = sum(Rating - b_i - mu)/(n()+lambda_u))
+  
+  b_g <- Capstone %>% 
+    left_join(b_i, by="Category") %>%
+    left_join(b_u, by="Installs")%>%
+    group_by(Genres) %>%
+    summarize(b_g = sum(Rating - b_i- b_u - mu)/(n()+l))
+  
+  predicted_ratings <-     validation %>% 
+    left_join(b_i, by = "Category") %>%
+    left_join(b_u, by = "Installs") %>%
+    left_join(b_g, by= "Genres") %>%
+    mutate(pred=mu + b_i+ b_u+ b_g)  %>%
+    .$pred
+  
+  return(RMSE(predicted_ratings, validation$Rating))
+})
+
+
+```
+
+```{r,echo=FALSE, cache=TRUE,  fig.align='center'}
+qplot(lambdas, rmses_b_g)  
+
+```
+
+
+```{r,echo=FALSE, cache=TRUE}
+lambda_g <- lambdas[which.min(rmses_b_g)]
+
+```
+The plot shows us that optimal lambda for genre effect model is `r lambda_g`.
+
+Whilst we see that the RMSE for all 3 effects models improves the prediction with RMSE = `r min(rmses_b_g)` as shown on the table below.
+
+```{r,echo=FALSE, cache=TRUE}
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized Category + Installs + Genres Effect Model",  
+                                     RMSE = min(rmses_b_g)))
+rmse_results %>% knitr::kable()
+
+```
+
+
+ 
+# Results and Prediction table
+
+Now, that we have the final model with RMSE of `r min(rmses_b_g)`, we will continue to produce the whole prediction table and present some snapshots of the table.
+
+Performing the verification of the prediction model,
+
+```{r message=FALSE, warning=FALSE, cache=TRUE, echo=FALSE,fig.align='center'}
+
+
+b_i <- validation %>%   group_by(Category) %>%  summarize(b_i = sum(Rating - mu)/(n()+lambda_i))
+
+b_u <- validation %>%   left_join(b_i, by="Category") %>%  group_by(Installs) %>%
+  summarize(b_u = sum(Rating - b_i - mu)/(n()+lambda_u))
+
+b_g <- validation %>%   left_join(b_i, by="Category") %>%
+  left_join(b_u, by="Installs")%>%  group_by(Genres) %>%
+  summarize(b_g = sum(Rating - b_i- b_u - mu)/(n()+lambda_g))
+
+predicted_ratings_rep <-   validation %>%   left_join(b_i, by = "Category") %>%
+  left_join(b_u, by = "Installs") %>%  left_join(b_g, by = "Genres") %>%
+  mutate(pred=mu + b_i+b_u+b_g)
+
+#check prediction vs Rating#
+
+
+Cat_rating_diff<-predicted_ratings_rep %>%  group_by(Category)%>%  summarize(P=mean(pred),R=mean(Rating),diff=R-P)
+
+Cat_rating_diff%>%ggplot(aes(R,P,colour=diff))+ geom_point()+ ggtitle("The App rating prediction by Category")
+
+App_rating_diff<-predicted_ratings_rep %>%  group_by(App)%>%  summarize(P=mean(pred),R=mean(Rating),diff=R-P)
+App_rating_diff%>%ggplot(aes(R,P,colour=diff))+ geom_point()+ ggtitle("The App rating prediction ") +scale_color_gradient(low="blue", high="yellow")
+
+```
+
+The chart above shows that most Predictions based on categories are between 0 and 0.4 point difference between predicted Ratings and real ratings with very few outliers, which shows that the Recommandation system renders very accurate results, whereas the second chart shows that even per App the Rating prediction is between 0 and 1 point difference between Ratings and predicted Ratings and is another proof that the Recommandation system is fairly accurate.
+
+```{r,echo=FALSE, cache=TRUE}
+
+predicted_ratings_rep <- 
+  New_googleplaystore %>% 
+  left_join(b_i, by = "Category") %>%
+  left_join(b_u, by = "Installs") %>%
+  left_join(b_g, by = "Genres") %>%
+  mutate(pred_c=mu + b_i+b_u+b_g)
+
+#whole table with predicted ratings for each App s####
+predicted_ratings_rep_byApp <-     predicted_ratings_rep %>%group_by(Category) %>% filter(!is.na(pred_c)) %>%
+summarize(n = n(), avg_ratings = mean(Rating), pred_ratings = mean(pred_c)) %>%
+  arrange(desc(n)) 
+  
+```
+
+Snapshot of 10 App prediction:
+
+```{r,echo=FALSE, cache=TRUE}
+
+head(predicted_ratings_rep_byApp,n=10L) %>% knitr::kable(digits=1) 
+```
+
+Snapshot of predicted rating for 10 first ratings by Category:
+```{r,echo=FALSE, cache=TRUE}
+
+predicted_ratings_rep%>% arrange(Category) %>% filter(!is.na(pred_c))%>% select(App,Rating, Category,Type,Genres,pred_c)%>%head(n=10L) %>% knitr::kable(digits=1) %>% kable_styling(full_width = F)%>%column_spec(1, width="4cm")
+
+```
+
+# Conclusion 
+
+The goal of this project was to create a Recommandation System for Apps available on Google Playstore.
+For this project, we downloaded the Google Play Store App data set from Kaggle. With first analysis we see that there are around 10000 observations with 13 variables. However, by starting the analysis of the Data and Data structure, we notice that the data set needs to be cleaned since there were: wrong entries, incompatible entries such as characters instead of numbers, *NaN* entries, full wrong lines and Apps that were repeated several times. After cleaning the Data, we ended with a Data set of 9000 observations, which new data set was renamed to New_googlePlaystore.
+Next step was to move to the creation of the Recommendation System, train a machine learning algorithm using the inputs in one subset to predict  ratings in the validation set. Develop our algorithm using the Capstone Data set newly created and predict  ratings in the validation set as if they were unknown. RMSE was used to evaluate how close our predictions  in the validation set.
+For the analysis and creating the Recommendation system, I started to perform the naive process where we assumed that all ratings are the same. I continued by adding the Number of Installation effect to the model and the number of Reviews effect. However an additional factor could be added which is the gGenre effect. I ended with a recommendation system using all three effects rendering a good RMSE.
+
+  
+Despite the good results with those 3 effect, there was still possibility to optimize the algorithm as it would have been offset in cases of Apps downloaded and rated rarely or reviewed  rarely. Hence, I developped also the regularization effect by using the Penalty least square function and finding best fitted lambdas where lambdas where the penalty factors.
+Hence, I ended with a Recommendation system with a final RMSE = 0.51. 
+
+Note: the algorithms and coding are all in the attachment of this project with extension R and Rmd files.
